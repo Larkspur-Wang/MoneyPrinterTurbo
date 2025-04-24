@@ -1415,11 +1415,18 @@ if batch_button:
             else:
                 current_params.video_terms = ""
 
-            current_params.video_subject = str(row['Title']) if not pd.isna(row['Title']) else ""
+            # 设置视频主题和标题贴纸文本
+            title_text = str(row['Title']) if not pd.isna(row['Title']) else ""
+            current_params.video_subject = title_text
+
+            # 确保标题贴纸文本也被设置
+            if title_text and current_params.title_sticker_enabled:
+                current_params.title_sticker_text = title_text
 
             # 记录当前处理的数据
             logger.info(f"Processing row {index+1}:")
-            logger.info(f"  Title: {current_params.video_subject}")
+            logger.info(f"  Title (video_subject): {current_params.video_subject}")
+            logger.info(f"  Title Sticker: {current_params.title_sticker_text if current_params.title_sticker_enabled else 'Disabled'}")
             logger.info(f"  Keywords: {current_params.video_terms}")
             logger.info(f"  Content length: {len(current_params.video_script)} characters")
         except Exception as e:
