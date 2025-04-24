@@ -15,7 +15,6 @@ if root_dir not in sys.path:
     print("")
 
 from app.config import config
-from app.models.const import FILE_TYPE_IMAGES, FILE_TYPE_VIDEOS
 from app.models.schema import (
     MaterialInfo,
     VideoAspect,
@@ -70,7 +69,7 @@ system_locale = utils.get_system_locale()
 
 def get_all_fonts():
     fonts = []
-    for root, dirs, files in os.walk(font_dir):
+    for root, _, files in os.walk(font_dir):
         for file in files:
             if file.endswith(".ttf") or file.endswith(".ttc"):
                 fonts.append(file)
@@ -90,7 +89,7 @@ if "ui_language" not in st.session_state:
 
 def get_all_songs():
     songs = []
-    for root, dirs, files in os.walk(song_dir):
+    for root, _, files in os.walk(song_dir):
         for file in files:
             if file.endswith(".mp3"):
                 songs.append(file)
@@ -460,61 +459,239 @@ uploaded_files = []
 with left_panel:
     with st.container(border=True):
         st.write(tr("Video Script Settings"))
-        params.video_subject = st.text_input(
-            tr("Video Subject"), value=st.session_state["video_subject"]
-        ).strip()
 
-        video_languages = [
-            (tr("Auto Detect"), ""),
-        ]
-        for code in support_locales:
-            video_languages.append((code, code))
+        # 添加CSV文件选择器
+        csv_tab, manual_tab = st.tabs([tr("Batch Mode (CSV)"), tr("Manual Mode")])
 
-        selected_index = st.selectbox(
-            tr("Script Language"),
-            index=0,
-            options=range(
-                len(video_languages)
-            ),  # Use the index as the internal option value
-            format_func=lambda x: video_languages[x][
-                0
-            ],  # The label is displayed to the user
-        )
-        params.video_language = video_languages[selected_index][1]
+        with csv_tab:
+            st.write(tr("Select CSV file with content, keywords, and title"))
+            csv_file = st.file_uploader(
+                tr("Upload CSV File"),
+                type=["csv"],
+                key="csv_file_uploader"
+            )
 
-        if st.button(
-            tr("Generate Video Script and Keywords"), key="auto_generate_script"
-        ):
-            with st.spinner(tr("Generating Video Script and Keywords")):
-                script = llm.generate_script(
-                    video_subject=params.video_subject, language=params.video_language
-                )
-                terms = llm.generate_terms(params.video_subject, script)
-                if "Error: " in script:
-                    st.error(tr(script))
-                elif "Error: " in terms:
-                    st.error(tr(terms))
-                else:
-                    st.session_state["video_script"] = script
-                    st.session_state["video_terms"] = ", ".join(terms)
-        params.video_script = st.text_area(
-            tr("Video Script"), value=st.session_state["video_script"], height=280
-        )
-        if st.button(tr("Generate Video Keywords"), key="auto_generate_terms"):
-            if not params.video_script:
-                st.error(tr("Please Enter the Video Subject"))
-                st.stop()
+            if csv_file is not None:
+                import pandas as pd
 
-            with st.spinner(tr("Generating Video Keywords")):
-                terms = llm.generate_terms(params.video_subject, params.video_script)
-                if "Error: " in terms:
-                    st.error(tr(terms))
-                else:
-                    st.session_state["video_terms"] = ", ".join(terms)
+                # 读取CSV文件，尝试多种编码和方法
+                encodings = ['utf-8', 'gbk', 'gb2312', 'gb18030', 'big5', 'latin1']
+                success = False
 
-        params.video_terms = st.text_area(
-            tr("Video Keywords"), value=st.session_state["video_terms"]
-        )
+                # 首先尝试直接读取
+                for encoding in encodings:
+                    try:
+                        df = pd.read_csv(csv_file, encoding=encoding)
+                        st.success(tr(f"CSV file loaded successfully with {encoding} encoding"))
+
+                        # 显示CSV文件的行数
+                        total_rows = len(df)
+                        st.info(tr(f"CSV file contains {total_rows} rows of data"))
+
+                        # 添加选项限制处理的行数
+                        process_all = st.checkbox(tr("Process all rows"), value=False, key="process_all_upload")
+                        if not process_all:
+                            max_rows = st.slider(tr("Number of rows to process"), 1, min(total_rows, 50), 3, key="max_rows_upload")
+                            st.info(tr(f"Will process first {max_rows} rows only"))
+                            # 注意：这里只是设置了预览的行数，实际处理时会根据checkbox的值决定
+
+                        st.write(tr("Preview of CSV content:"))
+                        # 确保显示完整内容
+                        st.dataframe(
+                            df.head(3).reset_index(),
+                            use_container_width=True,
+                            column_config={
+                                "index": "序号",
+                                "文案": st.column_config.TextColumn("文案", width="large"),
+                                "搜索词": st.column_config.TextColumn("搜索词", width="large"),
+                                "Title": st.column_config.TextColumn("Title", width="medium")
+                            }
+                        )
+
+                        # 存储到session_state中以便后续使用
+                        st.session_state["csv_data"] = df
+                        st.session_state["process_all"] = process_all
+                        if not process_all:
+                            st.session_state["max_rows"] = max_rows
+                        success = True
+                        break
+                    except Exception as e:
+                        continue
+
+                # 如果直接读取失败，尝试先保存到临时文件再读取
+                if not success:
+                    try:
+                        # 保存上传的文件到临时目录
+                        temp_dir = utils.storage_dir("temp", create=True)
+                        temp_file_path = os.path.join(temp_dir, f"temp_csv_{str(uuid4())}.csv")
+
+                        with open(temp_file_path, "wb") as f:
+                            f.write(csv_file.getbuffer())
+
+                        # 尝试不同编码读取保存的文件
+                        for encoding in encodings:
+                            try:
+                                df = pd.read_csv(temp_file_path, encoding=encoding)
+                                st.success(tr(f"CSV file loaded successfully with {encoding} encoding (via temp file)"))
+                                # 显示CSV文件的行数
+                                total_rows = len(df)
+                                st.info(tr(f"CSV file contains {total_rows} rows of data"))
+
+                                # 添加选项限制处理的行数
+                                process_all = st.checkbox(tr("Process all rows"), value=False, key="process_all_temp")
+                                if not process_all:
+                                    max_rows = st.slider(tr("Number of rows to process"), 1, min(total_rows, 50), 3, key="max_rows_temp")
+                                    st.info(tr(f"Will process first {max_rows} rows only"))
+
+                                st.write(tr("Preview of CSV content:"))
+                                # 确保显示完整内容
+                                st.dataframe(
+                                    df.head(3).reset_index(),
+                                    use_container_width=True,
+                                    column_config={
+                                        "index": "序号",
+                                        "文案": st.column_config.TextColumn("文案", width="large"),
+                                        "搜索词": st.column_config.TextColumn("搜索词", width="large"),
+                                        "Title": st.column_config.TextColumn("Title", width="medium")
+                                    }
+                                )
+
+                                # 存储到session_state中以便后续使用
+                                st.session_state["csv_data"] = df
+                                st.session_state["process_all"] = process_all
+                                if not process_all:
+                                    st.session_state["max_rows"] = max_rows
+                                success = True
+
+                                # 删除临时文件
+                                try:
+                                    os.remove(temp_file_path)
+                                except:
+                                    pass
+
+                                break
+                            except Exception as e:
+                                continue
+                    except Exception as e:
+                        logger.error(f"Error saving temp file: {str(e)}")
+
+                if not success:
+                    st.error(tr("Failed to read CSV file with any encoding. Please check the file format."))
+
+            # 添加一个选择本地CSV文件的选项
+            st.write(tr("Or use local CSV file:"))
+            if st.button(tr("Use @inputs\\1st_100.csv")):
+                import pandas as pd
+                csv_path = os.path.join(root_dir, "inputs", "1st_100.csv")
+
+                # 尝试多种编码读取本地CSV文件
+                encodings = ['utf-8', 'gbk', 'gb2312', 'gb18030', 'big5', 'latin1']
+                success = False
+
+                for encoding in encodings:
+                    try:
+                        df = pd.read_csv(csv_path, encoding=encoding)
+                        st.success(tr(f"Local CSV file loaded successfully with {encoding} encoding"))
+
+                        # 显示CSV文件的行数
+                        total_rows = len(df)
+                        st.info(tr(f"CSV file contains {total_rows} rows of data"))
+
+                        # 添加选项限制处理的行数
+                        process_all = st.checkbox(tr("Process all rows"), value=False, key="process_all_local")
+                        if not process_all:
+                            max_rows = st.slider(tr("Number of rows to process"), 1, min(total_rows, 50), 3, key="max_rows_local")
+                            st.info(tr(f"Will process first {max_rows} rows only"))
+                            # 注意：这里只是设置了预览的行数，实际处理时会根据checkbox的值决定
+
+                        st.write(tr("Preview of CSV content:"))
+                        # 确保显示完整内容
+                        st.dataframe(
+                            df.head(3).reset_index(),
+                            use_container_width=True,
+                            column_config={
+                                "index": "序号",
+                                "文案": st.column_config.TextColumn("文案", width="large"),
+                                "搜索词": st.column_config.TextColumn("搜索词", width="large"),
+                                "Title": st.column_config.TextColumn("Title", width="medium")
+                            }
+                        )
+
+                        # 存储到session_state中以便后续使用
+                        st.session_state["csv_data"] = df
+                        st.session_state["process_all"] = process_all
+                        if not process_all:
+                            st.session_state["max_rows"] = max_rows
+                        success = True
+                        break
+                    except Exception as e:
+                        continue
+
+                if not success:
+                    st.error(tr("Failed to read local CSV file with any encoding. Please check the file format."))
+
+            # 批量生成按钮将在后面添加
+
+        with manual_tab:
+            params.video_subject = st.text_input(
+                tr("Video Subject"), value=st.session_state["video_subject"]
+            ).strip()
+
+            video_languages = [
+                (tr("Auto Detect"), ""),
+            ]
+            for code in support_locales:
+                video_languages.append((code, code))
+
+            selected_index = st.selectbox(
+                tr("Script Language"),
+                index=0,
+                options=range(
+                    len(video_languages)
+                ),  # Use the index as the internal option value
+                format_func=lambda x: video_languages[x][
+                    0
+                ],  # The label is displayed to the user
+            )
+            params.video_language = video_languages[selected_index][1]
+
+        # 在manual_tab中添加生成脚本和关键词的按钮
+        with manual_tab:
+            if st.button(
+                tr("Generate Video Script and Keywords"), key="auto_generate_script"
+            ):
+                with st.spinner(tr("Generating Video Script and Keywords")):
+                    script = llm.generate_script(
+                        video_subject=params.video_subject, language=params.video_language
+                    )
+                    terms = llm.generate_terms(params.video_subject, script)
+                    if "Error: " in script:
+                        st.error(tr(script))
+                    elif "Error: " in terms:
+                        st.error(tr(terms))
+                    else:
+                        st.session_state["video_script"] = script
+                        st.session_state["video_terms"] = ", ".join(terms)
+
+            params.video_script = st.text_area(
+                tr("Video Script"), value=st.session_state["video_script"], height=280
+            )
+
+            if st.button(tr("Generate Video Keywords"), key="auto_generate_terms"):
+                if not params.video_script:
+                    st.error(tr("Please Enter the Video Subject"))
+                    st.stop()
+
+                with st.spinner(tr("Generating Video Keywords")):
+                    terms = llm.generate_terms(params.video_subject, params.video_script)
+                    if "Error: " in terms:
+                        st.error(tr(terms))
+                    else:
+                        st.session_state["video_terms"] = ", ".join(terms)
+
+            params.video_terms = st.text_area(
+                tr("Video Keywords"), value=st.session_state["video_terms"]
+            )
 
 with middle_panel:
     with st.container(border=True):
@@ -547,7 +724,7 @@ with middle_panel:
         config.app["video_source"] = params.video_source
 
         if params.video_source == "local":
-            _supported_types = FILE_TYPE_VIDEOS + FILE_TYPE_IMAGES
+            # 直接列出支持的文件类型
             uploaded_files = st.file_uploader(
                 "Upload Local Files",
                 type=["mp4", "mov", "avi", "flv", "mkv", "jpg", "jpeg", "png"],
@@ -1127,7 +1304,182 @@ with st.container(border=True):
     except Exception as e:
         logger.warning(f"Failed to remove temporary preview image file: {e}")
 
-start_button = st.button(tr("Generate Video"), use_container_width=True, type="primary")
+# 添加批量生成和单个生成按钮
+col1, col2 = st.columns(2)
+with col1:
+    start_button = st.button(tr("Generate Single Video"), use_container_width=True, type="primary")
+with col2:
+    batch_button = st.button(tr("Generate Batch Videos"), use_container_width=True, type="secondary")
+
+# 批量生成视频
+if batch_button:
+    config.save_config()
+
+    # 导入pandas库
+    import pandas as pd
+
+    # 检查是否有CSV数据
+    if "csv_data" not in st.session_state:
+        st.error(tr("Please upload or select a CSV file first"))
+        scroll_to_bottom()
+        st.stop()
+
+    csv_data = st.session_state["csv_data"]
+
+    # 检查CSV数据是否有必要的列
+    required_columns = ["文案", "搜索词", "Title"]
+    missing_columns = [col for col in required_columns if col not in csv_data.columns]
+    if missing_columns:
+        st.error(tr(f"CSV file is missing required columns: {', '.join(missing_columns)}"))
+        scroll_to_bottom()
+        st.stop()
+
+    # 使用session_state中的处理行数设置
+    total_rows = len(csv_data)
+
+    # 使用session_state中的设置
+    process_all = st.session_state.get("process_all", False)
+    if not process_all and "max_rows" in st.session_state:
+        max_rows = st.session_state["max_rows"]
+        csv_data = csv_data.head(max_rows)
+        st.info(tr(f"Processing first {max_rows} rows out of {total_rows} total rows"))
+
+    # 检查视频源设置
+    if params.video_source not in ["pexels", "pixabay", "local"]:
+        st.error(tr("Please Select a Valid Video Source"))
+        scroll_to_bottom()
+        st.stop()
+
+    if params.video_source == "pexels" and not config.app.get("pexels_api_keys", ""):
+        st.error(tr("Please Enter the Pexels API Key"))
+        scroll_to_bottom()
+        st.stop()
+
+    if params.video_source == "pixabay" and not config.app.get("pixabay_api_keys", ""):
+        st.error(tr("Please Enter the Pixabay API Key"))
+        scroll_to_bottom()
+        st.stop()
+
+    # 显示进度条
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+
+    # 创建日志容器
+    log_container = st.empty()
+    log_records = []
+
+    def log_received(msg):
+        if config.ui["hide_log"]:
+            return
+        with log_container:
+            log_records.append(msg)
+            st.code("\n".join(log_records[-50:]))  # 只显示最后50条日志
+
+    logger.add(log_received)
+
+    # 记录所有生成的视频文件
+    all_video_files = []
+    total_rows = len(csv_data)
+    st.write(tr(f"Starting to process {total_rows} rows..."))
+
+    # 确保pandas库可用
+    import pandas as pd
+
+    # 遍历CSV数据生成视频
+    for index, row in csv_data.iterrows():
+        # 更新进度
+        progress = int((index / total_rows) * 100)
+        progress_bar.progress(progress)
+        status_text.text(f"{tr('Processing')} {index+1}/{total_rows}: {row['Title']}")
+
+        # 设置参数
+        current_params = VideoParams(video_subject="")
+        # 复制当前UI中的所有参数 - 只复制模型中定义的字段
+        # 获取VideoParams类的所有字段
+        model_fields = VideoParams.__annotations__.keys()
+        for field in model_fields:
+            if field not in ['video_subject', 'video_script', 'video_terms'] and hasattr(params, field):
+                try:
+                    setattr(current_params, field, getattr(params, field))
+                except Exception as e:
+                    logger.warning(f"Error copying field {field}: {str(e)}")
+
+        # 设置CSV中的参数，确保处理编码问题
+        try:
+            # 确保文本数据是字符串类型
+            current_params.video_script = str(row['文案']) if not pd.isna(row['文案']) else ""
+
+            # 特殊处理搜索词，确保它是字符串格式
+            if not pd.isna(row['搜索词']):
+                current_params.video_terms = str(row['搜索词'])
+            else:
+                current_params.video_terms = ""
+
+            current_params.video_subject = str(row['Title']) if not pd.isna(row['Title']) else ""
+
+            # 记录当前处理的数据
+            logger.info(f"Processing row {index+1}:")
+            logger.info(f"  Title: {current_params.video_subject}")
+            logger.info(f"  Keywords: {current_params.video_terms}")
+            logger.info(f"  Content length: {len(current_params.video_script)} characters")
+        except Exception as e:
+            logger.error(f"Error processing row {index+1}: {str(e)}")
+            continue
+
+        # 处理本地视频文件
+        if uploaded_files:
+            local_videos_dir = utils.storage_dir("local_videos", create=True)
+            for file in uploaded_files:
+                file_path = os.path.join(local_videos_dir, f"{file.file_id}_{file.name}")
+                with open(file_path, "wb") as f:
+                    f.write(file.getbuffer())
+                    m = MaterialInfo()
+                    m.provider = "local"
+                    m.url = file_path
+                    if not current_params.video_materials:
+                        current_params.video_materials = []
+                    current_params.video_materials.append(m)
+
+        # 生成视频
+        task_id = str(uuid4())
+        st.toast(tr(f"Generating Video {index+1}/{total_rows}"))
+        logger.info(tr(f"Start Generating Video {index+1}/{total_rows}"))
+        logger.info(utils.to_json(current_params))
+
+        result = tm.start(task_id=task_id, params=current_params)
+        if not result or "videos" not in result:
+            logger.error(tr(f"Video Generation Failed for row {index+1}"))
+            continue
+
+        video_files = result.get("videos", [])
+        if video_files:
+            all_video_files.extend(video_files)
+            logger.success(tr(f"Video Generation Completed for row {index+1}"))
+
+    # 完成所有视频生成
+    progress_bar.progress(100)
+    status_text.text(tr("All videos generated successfully"))
+
+    # 显示所有生成的视频
+    st.success(tr("Batch Video Generation Completed"))
+    try:
+        if all_video_files:
+            st.write(tr(f"Generated {len(all_video_files)} videos:"))
+            # 每行显示3个视频
+            cols_per_row = 3
+            for i in range(0, len(all_video_files), cols_per_row):
+                cols = st.columns(cols_per_row)
+                for j in range(cols_per_row):
+                    if i+j < len(all_video_files):
+                        cols[j].video(all_video_files[i+j])
+                        cols[j].write(f"Video {i+j+1}")
+    except Exception as e:
+        logger.error(f"Error displaying videos: {str(e)}")
+
+    logger.info(tr("Batch Video Generation Completed"))
+    scroll_to_bottom()
+
+# 单个视频生成
 if start_button:
     config.save_config()
     task_id = str(uuid4())
