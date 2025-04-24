@@ -581,7 +581,7 @@ with middle_panel:
             tr("Video Transition Mode"),
             options=range(len(video_transition_modes)),
             format_func=lambda x: video_transition_modes[x][0],
-            index=0,
+            index=1,  # 默认选择随机转场
         )
         params.video_transition_mode = VideoTransitionMode(
             video_transition_modes[selected_index][1]
@@ -762,7 +762,7 @@ with right_panel:
 
         if params.subtitle_position == "custom":
             custom_position = st.text_input(
-                tr("Custom Position (% from top)"), value="65.0"
+                tr("Custom Position (% from top)"), value="85.0"
             )
             try:
                 params.custom_position = float(custom_position)
@@ -786,13 +786,25 @@ with right_panel:
 
         stroke_cols = st.columns([0.3, 0.7])
         with stroke_cols[0]:
-            params.stroke_color = st.color_picker(tr("Stroke Color"), "#FFFFFF")
+            # 添加随机描边颜色选项
+            stroke_color_options = [
+                (tr("White"), "#FFFFFF"),
+                (tr("Black"), "#000000"),
+                (tr("Random"), "random"),
+            ]
+            selected_stroke_index = st.selectbox(
+                tr("Stroke Color"),
+                options=range(len(stroke_color_options)),
+                format_func=lambda x: stroke_color_options[x][0],
+                index=0,
+            )
+            params.stroke_color = stroke_color_options[selected_stroke_index][1]
         with stroke_cols[1]:
             params.stroke_width = st.slider(tr("Stroke Width"), 0.0, 10.0, 4.0)
 
         # 艺术字体设置
         st.write(tr("Art Font Settings"))
-        params.art_font_enabled = st.checkbox(tr("Enable Art Font"), value=True)
+        params.art_font_enabled = st.checkbox(tr("Enable Art Font"), value=False)
 
         if params.art_font_enabled:
             art_font_types = [
@@ -916,7 +928,7 @@ with right_panel:
             ]
             selected_style_index = st.selectbox(
                 tr("Title Style"),
-                index=5,  # 默认选择金属质感
+                index=8,  # 默认选择Chinese Style
                 options=range(len(title_sticker_styles)),
                 format_func=lambda x: title_sticker_styles[x][0],
                 key="title_style_select"
@@ -948,7 +960,7 @@ with right_panel:
                 )
 
             # 标题贴纸背景启用选项
-            params.title_sticker_background_enabled = st.checkbox(tr("Enable Title Background"), value=True, key="title_bg_enabled")
+            params.title_sticker_background_enabled = st.checkbox(tr("Enable Title Background"), value=False, key="title_bg_enabled")
 
             if params.title_sticker_background_enabled:
                 # 标题贴纸背景类型
@@ -972,9 +984,39 @@ with right_panel:
                 params.title_sticker_background = "none"
 
             # 标题贴纸边框
-            params.title_sticker_border = st.checkbox(tr("Enable Title Border"), value=True, key="title_border")
+            params.title_sticker_border = st.checkbox(tr("Enable Title Border"), value=False, key="title_border")
             if params.title_sticker_border:
                 params.title_sticker_border_color = st.color_picker(tr("Title Border Color"), "#FFFFFF", key="title_border_color")
+
+            # 标题动画特效
+            st.write(tr("Title Animation Effects"))
+            title_animation_types = [
+                (tr("None"), "none"),
+                (tr("Bounce (Character)"), "bounce"),
+                (tr("Pulse (Character)"), "pulse"),
+                (tr("Whole Bounce"), "whole_bounce"),
+                (tr("Light Sweep"), "light_sweep"),
+                (tr("Rotate"), "rotate"),
+                (tr("Blink"), "blink"),
+                (tr("Wave"), "wave"),
+                (tr("Random"), "random"),
+            ]
+            selected_animation_index = st.selectbox(
+                tr("Title Animation"),
+                index=0,  # 默认选择无动画
+                options=range(len(title_animation_types)),
+                format_func=lambda x: title_animation_types[x][0],
+                key="title_animation_select"
+            )
+            params.title_sticker_animation = title_animation_types[selected_animation_index][1]
+
+            # 如果选择了动画，显示动画速度设置
+            if params.title_sticker_animation != "none":
+                params.title_sticker_animation_speed = st.slider(
+                    tr("Animation Speed"),
+                    0.5, 2.0, 1.0, 0.1,
+                    key="title_animation_speed"
+                )
 
             # 预览效果
             st.write(tr("Title Sticker Preview"))
@@ -1063,7 +1105,9 @@ with st.container(border=True):
             "position": params.title_sticker_position,
             "custom_position": params.title_sticker_custom_position,
             "background_enabled": params.title_sticker_background_enabled,
-            "text_color": params.title_sticker_text_color
+            "text_color": params.title_sticker_text_color,
+            "animation": getattr(params, "title_sticker_animation", "none"),
+            "animation_speed": getattr(params, "title_sticker_animation_speed", 1.0)
         }
 
     # 生成预览图像
