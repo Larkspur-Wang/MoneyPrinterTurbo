@@ -28,6 +28,7 @@ from app.models.schema import (
     VideoTransitionMode,
 )
 from app.services.utils import video_effects
+from app.services.utils import title_animations
 from app.utils import utils
 
 
@@ -92,6 +93,9 @@ def combine_videos(
         random.shuffle(raw_clips)
 
     # Add downloaded clips over and over until the duration of the audio (max_duration) has been reached
+    # 用于跟踪是否是第一个视频片段
+    is_first_clip = True
+
     while video_duration < audio_duration:
         for clip in raw_clips:
             # Check if clip is longer than the remaining audio
@@ -138,27 +142,34 @@ def combine_videos(
                     f"resizing video to {video_width} x {video_height}, clip size: {clip_w} x {clip_h}"
                 )
 
-            shuffle_side = random.choice(["left", "right", "top", "bottom"])
-            logger.info(f"Using transition mode: {video_transition_mode}")
-            if video_transition_mode.value == VideoTransitionMode.none.value:
-                clip = clip
-            elif video_transition_mode.value == VideoTransitionMode.fade_in.value:
-                clip = video_effects.fadein_transition(clip, 1)
-            elif video_transition_mode.value == VideoTransitionMode.fade_out.value:
-                clip = video_effects.fadeout_transition(clip, 1)
-            elif video_transition_mode.value == VideoTransitionMode.slide_in.value:
-                clip = video_effects.slidein_transition(clip, 1, shuffle_side)
-            elif video_transition_mode.value == VideoTransitionMode.slide_out.value:
-                clip = video_effects.slideout_transition(clip, 1, shuffle_side)
-            elif video_transition_mode.value == VideoTransitionMode.shuffle.value:
-                transition_funcs = [
-                    lambda c: video_effects.fadein_transition(c, 1),
-                    lambda c: video_effects.fadeout_transition(c, 1),
-                    lambda c: video_effects.slidein_transition(c, 1, shuffle_side),
-                    lambda c: video_effects.slideout_transition(c, 1, shuffle_side),
-                ]
-                shuffle_transition = random.choice(transition_funcs)
-                clip = shuffle_transition(clip)
+            # 如果是第一个视频片段，不应用转场效果
+            if is_first_clip:
+                logger.info("First clip: no transition effect applied")
+                # 不应用任何转场效果
+                is_first_clip = False  # 更新标志，后续片段将应用转场效果
+            else:
+                # 对后续视频片段应用转场效果
+                shuffle_side = random.choice(["left", "right", "top", "bottom"])
+                logger.info(f"Using transition mode: {video_transition_mode}")
+                if video_transition_mode.value == VideoTransitionMode.none.value:
+                    clip = clip
+                elif video_transition_mode.value == VideoTransitionMode.fade_in.value:
+                    clip = video_effects.fadein_transition(clip, 1)
+                elif video_transition_mode.value == VideoTransitionMode.fade_out.value:
+                    clip = video_effects.fadeout_transition(clip, 1)
+                elif video_transition_mode.value == VideoTransitionMode.slide_in.value:
+                    clip = video_effects.slidein_transition(clip, 1, shuffle_side)
+                elif video_transition_mode.value == VideoTransitionMode.slide_out.value:
+                    clip = video_effects.slideout_transition(clip, 1, shuffle_side)
+                elif video_transition_mode.value == VideoTransitionMode.shuffle.value:
+                    transition_funcs = [
+                        lambda c: video_effects.fadein_transition(c, 1),
+                        lambda c: video_effects.fadeout_transition(c, 1),
+                        lambda c: video_effects.slidein_transition(c, 1, shuffle_side),
+                        lambda c: video_effects.slideout_transition(c, 1, shuffle_side),
+                    ]
+                    shuffle_transition = random.choice(transition_funcs)
+                    clip = shuffle_transition(clip)
 
             if clip.duration > max_clip_duration:
                 clip = clip.subclipped(0, max_clip_duration)
@@ -662,13 +673,21 @@ def generate_video(
             )
         else:
             # 使用普通字幕
+            # 处理随机描边颜色
+            stroke_color = params.stroke_color
+            if stroke_color == "random":
+                # 随机生成一个颜色
+                random_color = "#{:06x}".format(random.randint(0, 0xFFFFFF))
+                stroke_color = random_color
+                logger.info(f"Using random stroke color: {stroke_color}")
+
             _clip = TextClip(
                 text=wrapped_txt,
                 font=font_path,
                 font_size=params.font_size,
                 color=params.text_fore_color,
                 bg_color=params.text_background_color,
-                stroke_color=params.stroke_color,
+                stroke_color=stroke_color,
                 stroke_width=params.stroke_width,
                 size=(video_width, None),
                 method='caption',
@@ -771,7 +790,23 @@ def generate_video(
                 # 默认位置（上方中间）
                 title_sticker = title_sticker.with_position(("center", video_height * 0.10))
 
+            # 设置标题贴纸持续时间
             title_sticker = title_sticker.with_duration(video_clip.duration)
+
+            # 应用动画效果
+            if hasattr(params, 'title_sticker_animation') and params.title_sticker_animation != "none":
+                # 获取动画速度
+                animation_speed = getattr(params, 'title_sticker_animation_speed', 1.0)
+
+                # 应用动画效果
+                title_sticker = title_animations.apply_animation(
+                    clip=title_sticker,
+                    animation_type=params.title_sticker_animation,
+                    duration=video_clip.duration,
+                    speed=animation_speed
+                )
+                logger.info(f"Applied animation effect: {params.title_sticker_animation} with speed {animation_speed}")
+
             video_elements.append(title_sticker)
             logger.info(f"Added title sticker: {params.title_sticker_text} at position {params.title_sticker_position}")
 
@@ -948,7 +983,11 @@ def create_preview_image(text, font_path, font_size, style, background_type, bac
     if style == "chinese_style":
         # 中国风格效果：红色填充+黄色粗描边
         # 描边颜色（默认黄色）
-        stroke_color = border_color if border else "#FFD700"
+        if border_color == "random":
+            # 随机生成一个颜色
+            stroke_color = "#{:06x}".format(random.randint(0, 0xFFFFFF))
+        else:
+            stroke_color = border_color if border else "#FFD700"
 
         # 绘制粗描边（多层描边增强效果）
         stroke_width = max(3, scaled_font_size // 10)  # 描边宽度
@@ -974,8 +1013,15 @@ def create_preview_image(text, font_path, font_size, style, background_type, bac
 
         # 添加描边
         if border:
+            # 处理随机描边颜色
+            if border_color == "random":
+                # 随机生成一个颜色
+                stroke_color = "#{:06x}".format(random.randint(0, 0xFFFFFF))
+            else:
+                stroke_color = border_color
+
             for offset_x, offset_y in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
-                draw.text((padding_x + offset_x, text_y_position + offset_y), text, font=font_obj, fill=border_color)
+                draw.text((padding_x + offset_x, text_y_position + offset_y), text, font=font_obj, fill=stroke_color)
 
         # 将渐变文本粘贴到主图像
         img.paste(gradient_img, (padding_x, text_y_position), gradient_img)
@@ -1029,8 +1075,15 @@ def create_preview_image(text, font_path, font_size, style, background_type, bac
 
         # 添加描边
         if border:
+            # 处理随机描边颜色
+            if border_color == "random":
+                # 随机生成一个颜色
+                stroke_color = "#{:06x}".format(random.randint(0, 0xFFFFFF))
+            else:
+                stroke_color = border_color
+
             for offset_x, offset_y in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
-                draw.text((padding_x + offset_x, text_y_position + offset_y), text, font=font_obj, fill=border_color)
+                draw.text((padding_x + offset_x, text_y_position + offset_y), text, font=font_obj, fill=stroke_color)
 
         # 将渐变文本粘贴到主图像
         img.paste(gradient_text, (padding_x, text_y_position), gradient_text)
@@ -1081,8 +1134,15 @@ def create_preview_image(text, font_path, font_size, style, background_type, bac
     else:  # normal
         # 添加描边
         if border:
+            # 处理随机描边颜色
+            if border_color == "random":
+                # 随机生成一个颜色
+                stroke_color = "#{:06x}".format(random.randint(0, 0xFFFFFF))
+            else:
+                stroke_color = border_color
+
             for offset_x, offset_y in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
-                draw.text((padding_x + offset_x, text_y_position + offset_y), text, font=font_obj, fill=border_color)
+                draw.text((padding_x + offset_x, text_y_position + offset_y), text, font=font_obj, fill=stroke_color)
 
         # 绘制主文本
         draw.text((padding_x, text_y_position), text, font=font_obj, fill="#FFFFFF")
@@ -1184,6 +1244,11 @@ def create_unified_preview(video_aspect, subtitle_params=None, title_params=None
         position = title_params.get("position", "upper_middle")
         custom_position = title_params.get("custom_position", 15.0)
         background_enabled = title_params.get("background_enabled", True)
+        animation = title_params.get("animation", "none")
+
+        # 如果有动画效果，在文本中添加提示
+        if animation != "none":
+            text = f"{text} [动画: {animation}]"
 
         # 获取文字颜色
         text_color = title_params.get("text_color", "#FF0000")
