@@ -19,6 +19,7 @@
     "Video Transition Mode": "Video Transition Mode",
     "None": "None",
     "Shuffle": "Shuffle",
+    "FadeShuffle": "Fade Shuffle",
     "Sequential": "Sequential",
     "FadeIn": "FadeIn",
     "FadeOut": "FadeOut",

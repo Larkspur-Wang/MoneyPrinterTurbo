@@ -749,6 +749,7 @@ with middle_panel:
         video_transition_modes = [
             (tr("None"), VideoTransitionMode.none.value),
             (tr("Shuffle"), VideoTransitionMode.shuffle.value),
+            (tr("FadeShuffle"), VideoTransitionMode.fade_shuffle.value),  # 渐入渐出随机
             (tr("Sequential"), VideoTransitionMode.sequential.value),  # 顺序应用所有特效
             (tr("FadeIn"), VideoTransitionMode.fade_in.value),
             (tr("FadeOut"), VideoTransitionMode.fade_out.value),
@@ -767,7 +768,7 @@ with middle_panel:
             tr("Video Transition Mode"),
             options=range(len(video_transition_modes)),
             format_func=lambda x: video_transition_modes[x][0],
-            index=1,  # 默认选择随机转场
+            index=2,  # 默认选择渐入渐出随机
         )
         params.video_transition_mode = VideoTransitionMode(
             video_transition_modes[selected_index][1]

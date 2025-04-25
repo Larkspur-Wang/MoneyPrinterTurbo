@@ -218,6 +218,17 @@ def combine_videos(
                     # 应用当前索引对应的特效
                     logger.info(f"Applying sequential transition effect #{clip_index+1}")
                     clip = all_transition_funcs[clip_index](clip)
+                elif video_transition_mode.value == VideoTransitionMode.fade_shuffle.value:
+                    # 渐入渐出随机，只在渐入和渐出之间随机选择
+                    fade_transition_funcs = [
+                        lambda c: video_effects.fadein_transition(c, 1),
+                        lambda c: video_effects.fadeout_transition(c, 1),
+                        lambda c: video_effects.crossfadein_transition(c, 1),
+                        lambda c: video_effects.crossfadeout_transition(c, 1),
+                    ]
+                    fade_shuffle_transition = random.choice(fade_transition_funcs)
+                    logger.info(f"Applying random fade transition effect")
+                    clip = fade_shuffle_transition(clip)
 
             if clip.duration > max_clip_duration:
                 clip = clip.subclipped(0, max_clip_duration)

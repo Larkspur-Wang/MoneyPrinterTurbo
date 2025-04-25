@@ -22,6 +22,7 @@ class VideoTransitionMode(str, Enum):
     none = None
     shuffle = "Shuffle"
     sequential = "Sequential"  # 顺序应用所有特效
+    fade_shuffle = "FadeShuffle"  # 渐入渐出随机
     fade_in = "FadeIn"
     fade_out = "FadeOut"
     slide_in = "SlideIn"

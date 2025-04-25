@@ -19,6 +19,7 @@
     "Video Transition Mode": "视频转场模式",
     "None": "无转场",
     "Shuffle": "随机转场",
+    "FadeShuffle": "渐入渐出随机",
     "Sequential": "顺序转场",
     "FadeIn": "渐入",
     "FadeOut": "渐出",
