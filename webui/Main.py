@@ -749,10 +749,19 @@ with middle_panel:
         video_transition_modes = [
             (tr("None"), VideoTransitionMode.none.value),
             (tr("Shuffle"), VideoTransitionMode.shuffle.value),
+            (tr("Sequential"), VideoTransitionMode.sequential.value),  # 顺序应用所有特效
             (tr("FadeIn"), VideoTransitionMode.fade_in.value),
             (tr("FadeOut"), VideoTransitionMode.fade_out.value),
             (tr("SlideIn"), VideoTransitionMode.slide_in.value),
             (tr("SlideOut"), VideoTransitionMode.slide_out.value),
+            (tr("CrossFadeIn"), VideoTransitionMode.cross_fade_in.value),
+            (tr("CrossFadeOut"), VideoTransitionMode.cross_fade_out.value),
+            (tr("Rotate"), VideoTransitionMode.rotate.value),
+            (tr("Blink"), VideoTransitionMode.blink.value),
+            (tr("MirrorX"), VideoTransitionMode.mirror_x.value),
+            (tr("MirrorY"), VideoTransitionMode.mirror_y.value),
+            (tr("ZoomIn"), VideoTransitionMode.zoom_in.value),
+            (tr("ZoomOut"), VideoTransitionMode.zoom_out.value),
         ]
         selected_index = st.selectbox(
             tr("Video Transition Mode"),

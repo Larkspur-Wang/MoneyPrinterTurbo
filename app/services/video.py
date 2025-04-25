@@ -161,15 +161,63 @@ def combine_videos(
                     clip = video_effects.slidein_transition(clip, 1, shuffle_side)
                 elif video_transition_mode.value == VideoTransitionMode.slide_out.value:
                     clip = video_effects.slideout_transition(clip, 1, shuffle_side)
+                elif video_transition_mode.value == VideoTransitionMode.cross_fade_in.value:
+                    clip = video_effects.crossfadein_transition(clip, 1)
+                elif video_transition_mode.value == VideoTransitionMode.cross_fade_out.value:
+                    clip = video_effects.crossfadeout_transition(clip, 1)
+                elif video_transition_mode.value == VideoTransitionMode.rotate.value:
+                    clip = video_effects.rotate_transition(clip, 1)
+                elif video_transition_mode.value == VideoTransitionMode.blink.value:
+                    clip = video_effects.blink_transition(clip, 1)
+                elif video_transition_mode.value == VideoTransitionMode.mirror_x.value:
+                    clip = video_effects.mirrorx_transition(clip, 1)
+                elif video_transition_mode.value == VideoTransitionMode.mirror_y.value:
+                    clip = video_effects.mirrory_transition(clip, 1)
+                elif video_transition_mode.value == VideoTransitionMode.zoom_in.value:
+                    clip = video_effects.zoomin_transition(clip, 1)
+                elif video_transition_mode.value == VideoTransitionMode.zoom_out.value:
+                    clip = video_effects.zoomout_transition(clip, 1)
                 elif video_transition_mode.value == VideoTransitionMode.shuffle.value:
                     transition_funcs = [
                         lambda c: video_effects.fadein_transition(c, 1),
                         lambda c: video_effects.fadeout_transition(c, 1),
                         lambda c: video_effects.slidein_transition(c, 1, shuffle_side),
                         lambda c: video_effects.slideout_transition(c, 1, shuffle_side),
+                        lambda c: video_effects.crossfadein_transition(c, 1),
+                        lambda c: video_effects.crossfadeout_transition(c, 1),
+                        lambda c: video_effects.rotate_transition(c, 1),
+                        lambda c: video_effects.blink_transition(c, 1),
+                        lambda c: video_effects.mirrorx_transition(c, 1),
+                        lambda c: video_effects.mirrory_transition(c, 1),
+                        lambda c: video_effects.zoomin_transition(c, 1),
+                        lambda c: video_effects.zoomout_transition(c, 1),
                     ]
                     shuffle_transition = random.choice(transition_funcs)
                     clip = shuffle_transition(clip)
+                elif video_transition_mode.value == VideoTransitionMode.sequential.value:
+                    # 顺序应用所有特效，根据视频片段的索引选择对应的特效
+                    # 获取当前视频片段的索引
+                    clip_index = len(clips) % 12  # 12种特效循环使用
+
+                    # 定义所有特效函数的列表，顺序与UI中显示的顺序一致
+                    all_transition_funcs = [
+                        lambda c: video_effects.fadein_transition(c, 1),
+                        lambda c: video_effects.fadeout_transition(c, 1),
+                        lambda c: video_effects.slidein_transition(c, 1, shuffle_side),
+                        lambda c: video_effects.slideout_transition(c, 1, shuffle_side),
+                        lambda c: video_effects.crossfadein_transition(c, 1),
+                        lambda c: video_effects.crossfadeout_transition(c, 1),
+                        lambda c: video_effects.rotate_transition(c, 1),
+                        lambda c: video_effects.blink_transition(c, 1),
+                        lambda c: video_effects.mirrorx_transition(c, 1),
+                        lambda c: video_effects.mirrory_transition(c, 1),
+                        lambda c: video_effects.zoomin_transition(c, 1),
+                        lambda c: video_effects.zoomout_transition(c, 1),
+                    ]
+
+                    # 应用当前索引对应的特效
+                    logger.info(f"Applying sequential transition effect #{clip_index+1}")
+                    clip = all_transition_funcs[clip_index](clip)
 
             if clip.duration > max_clip_duration:
                 clip = clip.subclipped(0, max_clip_duration)
