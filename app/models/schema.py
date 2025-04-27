@@ -21,10 +21,20 @@ class VideoConcatMode(str, Enum):
 class VideoTransitionMode(str, Enum):
     none = None
     shuffle = "Shuffle"
+    sequential = "Sequential"  # 顺序应用所有特效
+    fade_shuffle = "FadeShuffle"  # 渐入渐出随机
     fade_in = "FadeIn"
     fade_out = "FadeOut"
     slide_in = "SlideIn"
     slide_out = "SlideOut"
+    cross_fade_in = "CrossFadeIn"
+    cross_fade_out = "CrossFadeOut"
+    rotate = "Rotate"
+    blink = "Blink"
+    mirror_x = "MirrorX"
+    mirror_y = "MirrorY"
+    zoom_in = "ZoomIn"
+    zoom_out = "ZoomOut"
 
 
 class VideoAspect(str, Enum):
