@@ -1,7 +1,10 @@
 import json
+import os
 import os.path
 import re
 from timeit import default_timer as timer
+
+os.environ['KMP_DUPLICATE_LIB_OK']='TRUE'
 
 from faster_whisper import WhisperModel
 from loguru import logger

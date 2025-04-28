@@ -15,6 +15,7 @@ if root_dir not in sys.path:
     print("")
 
 from app.config import config
+from app.models import const
 from app.models.schema import (
     MaterialInfo,
     VideoAspect,
@@ -24,6 +25,7 @@ from app.models.schema import (
 )
 from app.services import llm, voice
 from app.services import task as tm
+from app.services import state as sm
 from app.utils import utils
 
 st.set_page_config(
@@ -795,7 +797,7 @@ with middle_panel:
         params.video_count = st.selectbox(
             tr("Number of Videos Generated Simultaneously"),
             options=[1, 2, 3, 4, 5],
-            index=0,
+            index=4,  # 默认选择5
         )
     with st.container(border=True):
         st.write(tr("Audio Settings"))
@@ -1354,6 +1356,9 @@ if batch_button:
         csv_data = csv_data.head(max_rows)
         st.info(tr(f"Processing first {max_rows} rows out of {total_rows} total rows"))
 
+    # 使用视频数量设置作为并发任务数量
+    concurrent_tasks = params.video_count
+
     # 检查视频源设置
     if params.video_source not in ["pexels", "pixabay", "local"]:
         st.error(tr("Please Select a Valid Video Source"))
@@ -1381,9 +1386,8 @@ if batch_button:
     def log_received(msg):
         if config.ui["hide_log"]:
             return
-        with log_container:
-            log_records.append(msg)
-            st.code("\n".join(log_records[-50:]))  # 只显示最后50条日志
+        # 只记录日志，不尝试更新UI
+        log_records.append(msg)
 
     logger.add(log_received)
 
@@ -1395,13 +1399,87 @@ if batch_button:
     # 确保pandas库可用
     import pandas as pd
 
-    # 遍历CSV数据生成视频
-    for index, row in csv_data.iterrows():
-        # 更新进度
-        progress = int((index / total_rows) * 100)
-        progress_bar.progress(progress)
-        status_text.text(f"{tr('Processing')} {index+1}/{total_rows}: {row['Title']}")
+    # 导入需要的模块
+    import time
+    from app.services import state as sm
 
+    # 创建任务管理器实例，使用用户设置的并发任务数
+    from app.controllers.manager.memory_manager import InMemoryTaskManager
+    batch_task_manager = InMemoryTaskManager(max_concurrent_tasks=concurrent_tasks)
+
+    # 创建任务结果字典和视频文件列表
+    task_results = {}
+    all_video_files = []
+
+    # 定义回调函数，用于处理任务完成后的结果
+    def process_task_result(task_id, index, row_title):
+        # 检查任务状态，不等待
+        task = sm.state.get_task(task_id)
+
+        # 如果任务不存在，可能是还没有创建或者刚刚创建
+        if not task:
+            # 检查任务是否在任务管理器的队列中
+            if task_id in task_start_times:
+                # 任务已经开始但还没有状态，可能是正在初始化
+                elapsed_time = time.time() - task_start_times[task_id]
+                if elapsed_time < 10:  # 给任务10秒的初始化时间
+                    logger.info(tr(f"Task initializing for row {index+1}: {row_title} ({elapsed_time:.1f}s)"))
+                    status_text.text(f"{tr('Initializing')} {index+1}/{total_rows}: {row_title}")
+                    return None  # 表示任务仍在进行中
+                else:
+                    # 初始化时间过长，可能有问题
+                    logger.warning(tr(f"Task initialization timeout for row {index+1}: {row_title}"))
+                    # 但仍然返回None，让超时机制来处理
+                    return None
+            else:
+                # 任务ID不在开始时间记录中，可能是真的不存在
+                logger.error(tr(f"Task not found for row {index+1}: {row_title}"))
+                task_results[task_id] = {"success": False}
+                return False
+
+        # 任务存在，检查状态
+        if task.get("state") == 1:  # TASK_STATE_COMPLETE
+            if "videos" in task:
+                video_files = task.get("videos", [])
+                if video_files:
+                    all_video_files.extend(video_files)
+                    logger.success(tr(f"Video Generation Completed for row {index+1}: {row_title}"))
+                    task_results[task_id] = {"success": True, "videos": video_files}
+                    return True
+            # 任务完成但没有视频
+            logger.error(tr(f"Video Generation Failed for row {index+1}: {row_title} - No videos generated"))
+            task_results[task_id] = {"success": False}
+            return False
+        elif task.get("state") == -1:  # TASK_STATE_FAILED
+            logger.error(tr(f"Video Generation Failed for row {index+1}: {row_title} - Task failed"))
+            task_results[task_id] = {"success": False}
+            return False
+        elif task.get("state") == 4:  # TASK_STATE_PROCESSING
+            # 任务正在进行中
+            progress = task.get("progress", 0)
+            state_name = "Processing"
+
+            # 更新状态文本
+            status_text.text(f"{tr('Processing')} {index+1}/{total_rows}: {row_title} - {state_name} {progress}%")
+
+            # 记录详细的任务状态
+            current_time = time.time()
+            if current_time - task_start_times.get(task_id, 0) > 30:  # 每30秒记录一次详细状态
+                logger.info(f"Task status for row {index+1}: {row_title} - State: {state_name}, Progress: {progress}%")
+                task_start_times[task_id] = current_time  # 更新时间戳
+
+            return None  # 表示任务仍在进行中
+        else:
+            # 未知状态
+            logger.warning(f"Unknown task state for row {index+1}: {row_title} - State: {task.get('state')}")
+            progress = task.get("progress", 0)
+            status_text.text(f"{tr('Processing')} {index+1}/{total_rows}: {row_title} - Unknown {progress}%")
+            return None  # 表示任务仍在进行中
+
+    # 准备所有任务
+    tasks_info = []
+
+    for index, row in csv_data.iterrows():
         # 设置参数
         current_params = VideoParams(video_subject="")
         # 复制当前UI中的所有参数 - 只复制模型中定义的字段
@@ -1434,7 +1512,7 @@ if batch_button:
                 current_params.title_sticker_text = title_text
 
             # 记录当前处理的数据
-            logger.info(f"Processing row {index+1}:")
+            logger.info(f"Preparing row {index+1}:")
             logger.info(f"  Title (video_subject): {current_params.video_subject}")
             logger.info(f"  Title Sticker: {current_params.title_sticker_text if current_params.title_sticker_enabled else 'Disabled'}")
             logger.info(f"  Keywords: {current_params.video_terms}")
@@ -1457,25 +1535,182 @@ if batch_button:
                         current_params.video_materials = []
                     current_params.video_materials.append(m)
 
-        # 生成视频
+        # 生成任务ID
         task_id = str(uuid4())
-        st.toast(tr(f"Generating Video {index+1}/{total_rows}"))
-        logger.info(tr(f"Start Generating Video {index+1}/{total_rows}"))
-        logger.info(utils.to_json(current_params))
 
-        result = tm.start(task_id=task_id, params=current_params)
-        if not result or "videos" not in result:
-            logger.error(tr(f"Video Generation Failed for row {index+1}"))
-            continue
+        # 添加到任务列表
+        tasks_info.append({
+            "task_id": task_id,
+            "params": current_params,
+            "index": index,
+            "title": title_text or f"Task {index+1}"
+        })
 
-        video_files = result.get("videos", [])
-        if video_files:
-            all_video_files.extend(video_files)
-            logger.success(tr(f"Video Generation Completed for row {index+1}"))
+    # 显示任务队列信息
+    st.info(tr(f"Prepared {len(tasks_info)} tasks, processing {concurrent_tasks} tasks at a time"))
+
+    # 添加所有任务到任务管理器
+    active_tasks = []
+    completed_tasks = 0
+
+    # 初始化进度条
+    progress_bar.progress(0)
+
+    # 创建一个函数来更新日志显示
+    def update_log_display():
+        with log_container:
+            st.code("\n".join(log_records[-50:]))  # 只显示最后50条日志
+
+        # 更新活动任务状态显示
+        if active_tasks:
+            # 获取第一个活动任务的状态
+            active_task = active_tasks[0]
+            task_id = active_task["task_id"]
+            index = active_task["index"]
+            title = active_task["title"]
+
+            task = sm.state.get_task(task_id)
+            if task:
+                state = task.get("state", "Unknown")
+                progress = task.get("progress", 0)
+                state_names = {-1: "Failed", 1: "Complete", 4: "Processing"}
+                state_name = state_names.get(state, f"Unknown({state})")
+                status_text.text(f"{tr('Processing')} {index+1}/{total_rows}: {title} - {state_name} {progress}%")
+
+                # 记录所有活动任务的状态
+                if len(active_tasks) > 1:
+                    logger.debug(f"Active tasks status:")
+                    for i, task_info in enumerate(active_tasks):
+                        task_status = sm.state.get_task(task_info["task_id"])
+                        if task_status:
+                            task_state = task_status.get("state", "Unknown")
+                            task_progress = task_status.get("progress", 0)
+                            logger.debug(f"  Task {i+1}: {task_info['title']} - State: {task_state}, Progress: {task_progress}%")
+
+    # 添加初始批次的任务
+    for i, task_info in enumerate(tasks_info[:concurrent_tasks]):
+        task_id = task_info["task_id"]
+        current_params = task_info["params"]
+        index = task_info["index"]
+        title = task_info["title"]
+
+        # 更新状态
+        status_text.text(f"{tr('Starting')} {index+1}/{total_rows}: {title}")
+
+        # 初始化任务状态
+        sm.state.update_task(task_id)
+
+        # 添加任务
+        logger.info(tr(f"Adding task for row {index+1}: {title}"))
+        batch_task_manager.add_task(tm.start, task_id=task_id, params=current_params)
+
+        # 记录活动任务
+        active_tasks.append({"task_id": task_id, "index": index, "title": title})
+
+    # 处理所有任务直到完成
+    next_task_index = concurrent_tasks
+    last_log_update = time.time()
+
+    # 记录任务开始时间，用于超时检测
+    task_start_times = {task["task_id"]: time.time() for task in active_tasks}
+    task_timeout = 600  # 任务超时时间，单位：秒（增加到10分钟）
+
+    # 记录任务状态
+    logger.info(f"Starting batch processing with {concurrent_tasks} concurrent tasks")
+    logger.info(f"Total tasks: {len(tasks_info)}")
+    logger.info(f"Active tasks: {len(active_tasks)}")
+    for i, task in enumerate(active_tasks):
+        logger.info(f"Active task {i+1}: {task['task_id']} - {task['title']}")
+
+    while active_tasks or next_task_index < len(tasks_info):
+        # 检查活动任务的状态
+        for i in range(len(active_tasks) - 1, -1, -1):
+            task = active_tasks[i]
+            task_id = task["task_id"]
+            index = task["index"]
+            title = task["title"]
+
+            # 检查任务状态
+            result = process_task_result(task_id, index, title)
+
+            # 检查任务是否超时
+            current_time = time.time()
+            if task_id in task_start_times and (current_time - task_start_times[task_id]) > task_timeout:
+                # 获取任务状态
+                task_status = sm.state.get_task(task_id)
+
+                # 记录超时信息
+                logger.warning(tr(f"Task timeout check for row {index+1}: {title} - Elapsed: {current_time - task_start_times[task_id]:.1f}s"))
+
+                if task_status:
+                    # 记录当前任务状态
+                    state = task_status.get("state", "Unknown")
+                    progress = task_status.get("progress", 0)
+                    logger.warning(tr(f"Task state: {state}, progress: {progress}%"))
+
+                    # 只有当任务仍在处理中且已经超过超时时间很多时才标记为失败
+                    if state == 4 and (current_time - task_start_times[task_id]) > task_timeout * 1.5:  # 给予50%的额外时间
+                        logger.error(tr(f"Task is still processing after extended timeout, marking as failed"))
+                        result = False  # 将超时任务标记为失败
+                else:
+                    # 如果任务不存在，标记为失败
+                    logger.error(tr(f"Task not found after timeout, marking as failed"))
+                    result = False  # 将超时任务标记为失败
+
+            # 如果任务已完成或失败
+            if result is not None:  # True表示成功，False表示失败，None表示仍在进行中
+                # 从活动任务列表中移除
+                active_tasks.pop(i)
+
+                # 增加完成任务计数
+                completed_tasks += 1
+
+                # 更新总进度
+                progress = int((completed_tasks / len(tasks_info)) * 100)
+                progress_bar.progress(progress)
+
+                # 添加下一个任务（如果有）
+                if next_task_index < len(tasks_info):
+                    next_task = tasks_info[next_task_index]
+                    next_task_id = next_task["task_id"]
+                    next_params = next_task["params"]
+                    next_index = next_task["index"]
+                    next_title = next_task["title"]
+
+                    # 初始化任务状态
+                    sm.state.update_task(next_task_id, state=const.TASK_STATE_PROCESSING, progress=0)
+
+                    # 添加任务
+                    logger.info(tr(f"Adding task for row {next_index+1}: {next_title}"))
+                    batch_task_manager.add_task(tm.start, task_id=next_task_id, params=next_params)
+
+                    # 记录活动任务
+                    active_tasks.append({"task_id": next_task_id, "index": next_index, "title": next_title})
+
+                    # 记录任务开始时间
+                    task_start_times[next_task_id] = time.time()
+
+                    # 增加下一个任务索引
+                    next_task_index += 1
+
+                    # 记录当前活动任务数量
+                    logger.info(tr(f"Active tasks: {len(active_tasks)}/{concurrent_tasks}"))
+
+        # 定期更新日志显示（每2秒更新一次）
+        current_time = time.time()
+        if current_time - last_log_update > 2:
+            update_log_display()
+            last_log_update = current_time
+
+        # 短暂休眠以减少CPU使用
+        time.sleep(0.5)
 
     # 完成所有视频生成
     progress_bar.progress(100)
     status_text.text(tr("All videos generated successfully"))
+
+    # 最后更新一次日志显示
+    update_log_display()
 
     # 显示所有生成的视频
     st.success(tr("Batch Video Generation Completed"))

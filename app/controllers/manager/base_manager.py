@@ -16,6 +16,7 @@ class TaskManager:
         with self.lock:
             if self.current_tasks < self.max_concurrent_tasks:
                 print(f"add task: {func.__name__}, current_tasks: {self.current_tasks}")
+                self.current_tasks += 1  # 立即增加计数，防止竞态条件
                 self.execute_task(func, *args, **kwargs)
             else:
                 print(
@@ -31,8 +32,7 @@ class TaskManager:
 
     def run_task(self, func: Callable, *args: Any, **kwargs: Any):
         try:
-            with self.lock:
-                self.current_tasks += 1
+            # 不再增加计数，因为已经在add_task中增加了
             func(*args, **kwargs)  # call the function here, passing *args and **kwargs.
         finally:
             self.task_done()
