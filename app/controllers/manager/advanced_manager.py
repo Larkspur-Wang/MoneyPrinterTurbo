@@ -59,6 +59,15 @@ class AdvancedTaskManager(TaskManager):
         self.phase_hooks = {}  # 阶段钩子，用于在任务进入某个阶段时执行特定操作
         self.task_phase_lock = threading.Lock()  # 任务阶段锁
 
+        # 设置内存监控
+        self.memory_check_interval = 60  # 内存检查间隔（秒）
+        self.last_memory_check = time.time()
+        self.memory_threshold = 0.85  # 内存使用率阈值（85%）
+
+        # 启动内存监控线程
+        self.memory_monitor_thread = threading.Thread(target=self._monitor_memory, daemon=True)
+        self.memory_monitor_thread.start()
+
     def create_queue(self):
         return PriorityQueue()
 
@@ -247,3 +256,66 @@ class AdvancedTaskManager(TaskManager):
             for task_id in list(self.task_info_map.keys()):
                 if self.task_info_map[task_id].is_complete or self.task_info_map[task_id].is_failed:
                     del self.task_info_map[task_id]
+
+    def _monitor_memory(self):
+        """内存监控线程"""
+        try:
+            import psutil
+            has_psutil = True
+        except ImportError:
+            logger.warning("psutil not available, memory monitoring disabled")
+            has_psutil = False
+
+        while True:
+            try:
+                # 如果没有psutil，就不进行内存监控
+                if not has_psutil:
+                    time.sleep(60)
+                    continue
+
+                # 检查内存使用率
+                current_time = time.time()
+                if current_time - self.last_memory_check > self.memory_check_interval:
+                    self.last_memory_check = current_time
+
+                    # 获取内存使用率
+                    memory_usage = psutil.virtual_memory().percent / 100.0
+
+                    # 如果内存使用率超过阈值，进行垃圾回收
+                    if memory_usage > self.memory_threshold:
+                        logger.warning(f"Memory usage high ({memory_usage*100:.1f}%), performing garbage collection")
+                        import gc
+                        gc.collect()
+
+                        # 如果内存使用率仍然很高，减少并发任务数
+                        memory_usage_after_gc = psutil.virtual_memory().percent / 100.0
+                        if memory_usage_after_gc > self.memory_threshold:
+                            with self.lock:
+                                if self.max_concurrent_tasks > 1:
+                                    self.max_concurrent_tasks -= 1
+                                    logger.warning(f"Reducing max concurrent tasks to {self.max_concurrent_tasks}")
+                                if self.max_render_tasks > 1:
+                                    self.max_render_tasks -= 1
+                                    logger.warning(f"Reducing max render tasks to {self.max_render_tasks}")
+
+                # 休眠一段时间
+                time.sleep(10)
+            except Exception as e:
+                logger.error(f"Error in memory monitor: {str(e)}")
+                time.sleep(60)  # 出错时休眠较长时间
+
+    def get_memory_usage(self):
+        """获取内存使用情况"""
+        try:
+            import psutil
+            memory = psutil.virtual_memory()
+            return {
+                "total": memory.total,
+                "available": memory.available,
+                "used": memory.used,
+                "percent": memory.percent
+            }
+        except ImportError:
+            return {"error": "psutil not available"}
+        except Exception as e:
+            return {"error": str(e)}

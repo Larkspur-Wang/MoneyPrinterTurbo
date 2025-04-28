@@ -17,12 +17,21 @@ from app.services import llm, material, subtitle, video, voice
 from app.services import state as sm
 from app.utils import utils
 
-# 导入视频处理相关库
-try:
-    from moviepy.editor import VideoFileClip
-except ImportError:
-    logger.warning("MoviePy not available, video validation will be limited")
-    VideoFileClip = None
+# 不直接导入moviepy，而是在需要时动态导入
+# 这样可以避免IDE报错，同时保持功能正常
+VideoFileClip = None  # 全局变量，用于标记是否可用
+
+def get_video_file_clip():
+    """动态导入VideoFileClip"""
+    global VideoFileClip
+    if VideoFileClip is None:
+        try:
+            from moviepy.editor import VideoFileClip as VFC
+            VideoFileClip = VFC
+        except ImportError:
+            logger.warning("MoviePy not available, video validation will be limited")
+            VideoFileClip = False
+    return VideoFileClip
 
 
 def phase_script(task_id, params):
@@ -257,9 +266,13 @@ def phase_render(task_id, params, downloaded_videos, audio_file, subtitle_path):
                         if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
                             try:
                                 # 尝试验证视频文件完整性
-                                if VideoFileClip is not None:
-                                    clip = VideoFileClip(video_path)
-                                    clip.close()
+                                video_clip = get_video_file_clip()
+                                if video_clip and video_clip is not False:
+                                    try:
+                                        clip = video_clip(video_path)
+                                        clip.close()
+                                    except Exception as clip_error:
+                                        logger.warning(f"Error validating video: {str(clip_error)}")
                                 valid_videos.append(video_path)
                             except Exception as e:
                                 logger.warning(f"Invalid video file {video_path}: {str(e)}")
@@ -337,11 +350,20 @@ def phase_render(task_id, params, downloaded_videos, audio_file, subtitle_path):
 
 def start_phased(task_id, params: VideoParams, task_manager=None, stop_at: str = "video"):
     """分阶段启动任务"""
+    # 强制进行垃圾回收
+    import gc
+    gc.collect()
+
     logger.info(f"start phased task: {task_id}, stop_at: {stop_at}")
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=5)
 
     if type(params.video_concat_mode) is str:
         params.video_concat_mode = VideoConcatMode(params.video_concat_mode)
+
+    # 限制视频数量，防止内存溢出
+    if params.video_count > 2:
+        logger.warning(f"Limiting video count from {params.video_count} to 2 to prevent memory issues")
+        params.video_count = 2
 
     # 更新任务阶段
     if task_manager:

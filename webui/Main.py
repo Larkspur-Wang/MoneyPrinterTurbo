@@ -624,6 +624,25 @@ with left_panel:
                         st.session_state["process_all"] = process_all
                         if not process_all:
                             st.session_state["max_rows"] = max_rows
+
+                        # 添加任务管理器配置滑块
+                        st.write(tr("Task Manager Configuration"))
+                        task_manager_cols = st.columns(3)
+                        with task_manager_cols[0]:
+                            concurrent_tasks = st.slider(tr("Concurrent Tasks"), 1, 10, 5, 1, key="concurrent_tasks_slider")
+                            st.session_state["concurrent_tasks"] = concurrent_tasks
+
+                        with task_manager_cols[1]:
+                            max_download_tasks = st.slider(tr("Max Download Tasks"), 1, 5, 2, 1, key="download_tasks_slider")
+                            st.session_state["max_download_tasks"] = max_download_tasks
+
+                        with task_manager_cols[2]:
+                            max_render_tasks = st.slider(tr("Max Render Tasks"), 1, 5, 2, 1, key="render_tasks_slider")
+                            st.session_state["max_render_tasks"] = max_render_tasks
+
+                        # 显示任务管理器配置信息
+                        st.info(tr(f"Task Manager Configuration: Concurrent Tasks: {concurrent_tasks}, Download Tasks: {max_download_tasks}, Render Tasks: {max_render_tasks}"))
+
                         success = True
                         break
                     except Exception as e:
@@ -1356,19 +1375,10 @@ if batch_button:
         csv_data = csv_data.head(max_rows)
         st.info(tr(f"Processing first {max_rows} rows out of {total_rows} total rows"))
 
-    # 设置并发任务数量
-    concurrent_tasks = 5  # 默认值
-
-    # 添加并发任务数量设置
-    concurrent_tasks_col, download_tasks_col, render_tasks_col = st.columns(3)
-    with concurrent_tasks_col:
-        concurrent_tasks = st.slider(tr("Concurrent Tasks"), 1, 10, 5, 1)
-
-    with download_tasks_col:
-        max_download_tasks = st.slider(tr("Max Download Tasks"), 1, 5, 2, 1)
-
-    with render_tasks_col:
-        max_render_tasks = st.slider(tr("Max Render Tasks"), 1, 5, 2, 1)
+    # 从session_state中获取任务管理器配置
+    concurrent_tasks = st.session_state.get("concurrent_tasks", 5)  # 默认值5
+    max_download_tasks = st.session_state.get("max_download_tasks", 2)  # 默认值2
+    max_render_tasks = st.session_state.get("max_render_tasks", 2)  # 默认值2
 
     # 检查视频源设置
     if params.video_source not in ["pexels", "pixabay", "local"]:
@@ -1427,6 +1437,14 @@ if batch_button:
 
     # 显示任务管理器配置
     st.info(tr(f"Task Manager Configuration: Concurrent Tasks: {concurrent_tasks}, Download Tasks: {max_download_tasks}, Render Tasks: {max_render_tasks}"))
+
+    # 检查psutil是否安装
+    try:
+        import psutil
+        has_psutil = True
+    except ImportError:
+        has_psutil = False
+        st.warning(tr("建议安装psutil以启用内存监控功能: pip install psutil"))
 
     # 创建任务结果字典和视频文件列表
     task_results = {}
@@ -1577,77 +1595,67 @@ if batch_button:
     # 初始化进度条
     progress_bar.progress(0)
 
-    # 创建一个函数来更新日志显示
+    # 创建一个函数来更新日志显示，使用Streamlit的缓存机制
+    @st.cache_data(ttl=10, max_entries=1)  # 缓存10秒，只保留最新的一个条目
+    def get_latest_logs():
+        return "\n".join(log_records[-30:])  # 只显示最后30条日志
+
+    # 创建一个函数来获取任务状态，使用Streamlit的缓存机制
+    @st.cache_data(ttl=5, max_entries=1)  # 缓存5秒，只保留最新的一个条目
+    def get_task_status_data(active_tasks_tuple):
+        # 将元组转换回列表
+        active_tasks_list = []
+        for task_tuple in active_tasks_tuple:
+            if len(task_tuple) >= 3:  # 确保元组有足够的元素
+                active_tasks_list.append({
+                    "task_id": task_tuple[0],
+                    "index": task_tuple[1],
+                    "title": task_tuple[2]
+                })
+
+        # 创建任务状态表格数据
+        task_status_rows = []
+
+        # 定义状态和阶段映射
+        state_names = {-1: "Failed", 1: "Complete", 4: "Processing"}
+        phase_map = {
+            TaskPhase.INIT: "Initializing",
+            TaskPhase.SCRIPT: "Generating Script",
+            TaskPhase.TERMS: "Generating Keywords",
+            TaskPhase.AUDIO: "Generating Audio",
+            TaskPhase.SUBTITLE: "Generating Subtitle",
+            TaskPhase.DOWNLOAD: "Downloading Videos",
+            TaskPhase.RENDER: "Rendering Video",
+            TaskPhase.COMPLETE: "Complete",
+            TaskPhase.FAILED: "Failed"
+        }
+
+        # 获取所有任务的状态
+        for i, task_info in enumerate(active_tasks_list):
+            task_status = sm.state.get_task(task_info["task_id"])
+            task_phase_info = batch_task_manager.get_task_info(task_info["task_id"])
+
+            if task_status and task_phase_info:
+                task_state = task_status.get("state", "Unknown")
+                task_progress = task_status.get("progress", 0)
+                task_phase = phase_map.get(task_phase_info.phase, "Unknown")
+
+                # 添加到状态行
+                task_status_rows.append({
+                    "Task": i+1,
+                    "Title": task_info["title"],
+                    "State": state_names.get(task_state, f"Unknown({task_state})"),
+                    "Progress": f"{task_progress}%",
+                    "Phase": task_phase
+                })
+
+        return task_status_rows
+
+    # 更新界面显示 - 这个函数现在只用于最后的更新，主循环中直接更新界面
     def update_log_display():
+        # 更新日志显示
         with log_container:
-            st.code("\n".join(log_records[-50:]))  # 只显示最后50条日志
-
-        # 更新活动任务状态显示
-        if active_tasks:
-            # 获取第一个活动任务的状态
-            active_task = active_tasks[0]
-            task_id = active_task["task_id"]
-            index = active_task["index"]
-            title = active_task["title"]
-
-            # 获取任务状态
-            task = sm.state.get_task(task_id)
-
-            # 获取任务阶段信息
-            task_info = batch_task_manager.get_task_info(task_id)
-            phase_name = "Unknown"
-            if task_info:
-                phase_map = {
-                    TaskPhase.INIT: "Initializing",
-                    TaskPhase.SCRIPT: "Generating Script",
-                    TaskPhase.TERMS: "Generating Keywords",
-                    TaskPhase.AUDIO: "Generating Audio",
-                    TaskPhase.SUBTITLE: "Generating Subtitle",
-                    TaskPhase.DOWNLOAD: "Downloading Videos",
-                    TaskPhase.RENDER: "Rendering Video",
-                    TaskPhase.COMPLETE: "Complete",
-                    TaskPhase.FAILED: "Failed"
-                }
-                phase_name = phase_map.get(task_info.phase, "Unknown")
-
-            if task:
-                state = task.get("state", "Unknown")
-                progress = task.get("progress", 0)
-                state_names = {-1: "Failed", 1: "Complete", 4: "Processing"}
-                state_name = state_names.get(state, f"Unknown({state})")
-                status_text.text(f"{tr('Processing')} {index+1}/{total_rows}: {title} - {state_name} {progress}% - {phase_name}")
-
-                # 记录所有活动任务的状态
-                if len(active_tasks) > 1:
-                    # 创建任务状态表格
-                    task_status_rows = []
-                    for i, task_info in enumerate(active_tasks):
-                        task_status = sm.state.get_task(task_info["task_id"])
-                        task_phase_info = batch_task_manager.get_task_info(task_info["task_id"])
-
-                        if task_status and task_phase_info:
-                            task_state = task_status.get("state", "Unknown")
-                            task_progress = task_status.get("progress", 0)
-                            task_phase = phase_map.get(task_phase_info.phase, "Unknown")
-
-                            # 添加到状态行
-                            task_status_rows.append({
-                                "Task": i+1,
-                                "Title": task_info["title"],
-                                "State": state_names.get(task_state, f"Unknown({task_state})"),
-                                "Progress": f"{task_progress}%",
-                                "Phase": task_phase
-                            })
-
-                    # 如果有任务状态，显示表格
-                    if task_status_rows:
-                        # 创建一个临时DataFrame
-                        import pandas as pd
-                        task_status_df = pd.DataFrame(task_status_rows)
-
-                        # 显示表格
-                        st.write("Active Tasks Status:")
-                        st.dataframe(task_status_df, use_container_width=True)
+            st.code(get_latest_logs())
 
     # 添加初始批次的任务
     for i, task_info in enumerate(tasks_info[:concurrent_tasks]):
@@ -1758,37 +1766,118 @@ if batch_button:
                     # 记录当前活动任务数量
                     logger.info(tr(f"Active tasks: {len(active_tasks)}/{concurrent_tasks}"))
 
-        # 定期更新日志显示（每5秒更新一次，减少界面刷新）
+        # 定期更新日志显示（每10秒更新一次，大幅减少界面刷新）
         current_time = time.time()
-        if current_time - last_log_update > 5:
-            # 更新任务状态显示
-            update_log_display()
+        if current_time - last_log_update > 10:
+            try:
+                # 更新日志显示
+                with log_container:
+                    st.code(get_latest_logs())
 
-            # 显示任务管理器状态（只在状态变化时记录）
-            active_count = len(batch_task_manager.get_active_tasks())
-            download_count = sum(1 for task in batch_task_manager.get_active_tasks() if task.phase == TaskPhase.DOWNLOAD)
-            render_count = sum(1 for task in batch_task_manager.get_active_tasks() if task.phase == TaskPhase.RENDER)
+                # 更新第一个活动任务的状态显示
+                if active_tasks:
+                    active_task = active_tasks[0]
+                    task_id = active_task["task_id"]
+                    index = active_task["index"]
+                    title = active_task["title"]
 
-            # 检查状态是否变化
-            current_status = (active_count, download_count, render_count)
-            if not hasattr(update_log_display, 'last_status') or update_log_display.last_status != current_status:
-                # 记录任务管理器状态
-                logger.info(f"Task Manager Status: Active: {active_count}, Download: {download_count}, Render: {render_count}")
-                # 更新上次状态
-                update_log_display.last_status = current_status
+                    # 获取任务状态
+                    task = sm.state.get_task(task_id)
 
-            # 更新时间戳
-            last_log_update = current_time
+                    # 获取任务阶段信息
+                    task_info = batch_task_manager.get_task_info(task_id)
+                    phase_name = "Unknown"
+                    if task_info:
+                        phase_map = {
+                            TaskPhase.INIT: "Initializing",
+                            TaskPhase.SCRIPT: "Generating Script",
+                            TaskPhase.TERMS: "Generating Keywords",
+                            TaskPhase.AUDIO: "Generating Audio",
+                            TaskPhase.SUBTITLE: "Generating Subtitle",
+                            TaskPhase.DOWNLOAD: "Downloading Videos",
+                            TaskPhase.RENDER: "Rendering Video",
+                            TaskPhase.COMPLETE: "Complete",
+                            TaskPhase.FAILED: "Failed"
+                        }
+                        phase_name = phase_map.get(task_info.phase, "Unknown")
+
+                    if task:
+                        state = task.get("state", "Unknown")
+                        progress = task.get("progress", 0)
+                        state_names = {-1: "Failed", 1: "Complete", 4: "Processing"}
+                        state_name = state_names.get(state, f"Unknown({state})")
+                        status_text.text(f"{tr('Processing')} {index+1}/{total_rows}: {title} - {state_name} {progress}% - {phase_name}")
+
+                # 显示任务管理器状态（只在状态变化时记录）
+                active_count = len(batch_task_manager.get_active_tasks())
+                download_count = sum(1 for task in batch_task_manager.get_active_tasks() if task.phase == TaskPhase.DOWNLOAD)
+                render_count = sum(1 for task in batch_task_manager.get_active_tasks() if task.phase == TaskPhase.RENDER)
+
+                # 检查状态是否变化
+                current_status = (active_count, download_count, render_count)
+                if not hasattr(update_log_display, 'last_status') or update_log_display.last_status != current_status:
+                    # 记录任务管理器状态
+                    logger.info(f"Task Manager Status: Active: {active_count}, Download: {download_count}, Render: {render_count}")
+                    # 更新上次状态
+                    update_log_display.last_status = current_status
+
+                # 显示任务状态表格（如果有多个任务）
+                if len(active_tasks) > 1:
+                    # 创建一个静态容器来显示任务状态表格
+                    if not hasattr(update_log_display, 'task_table_container'):
+                        update_log_display.task_table_container = st.empty()
+
+                    # 将活动任务列表转换为元组，以便用于缓存函数
+                    active_tasks_tuple = tuple((task["task_id"], task["index"], task["title"]) for task in active_tasks)
+
+                    # 获取任务状态数据
+                    task_status_rows = get_task_status_data(active_tasks_tuple)
+
+                    # 如果有任务状态，显示表格
+                    if task_status_rows:
+                        with update_log_display.task_table_container:
+                            # 创建一个临时DataFrame
+                            import pandas as pd
+                            task_status_df = pd.DataFrame(task_status_rows)
+
+                            # 显示表格
+                            st.write("Active Tasks Status:")
+                            st.dataframe(task_status_df, use_container_width=True)
+
+                # 显示内存使用情况（每分钟一次）
+                if not hasattr(update_log_display, 'last_memory_check') or current_time - update_log_display.last_memory_check > 60:
+                    try:
+                        memory_usage = batch_task_manager.get_memory_usage()
+                        if "error" not in memory_usage:
+                            memory_percent = memory_usage["percent"]
+                            logger.info(f"Memory usage: {memory_percent:.1f}%")
+
+                            # 如果内存使用率过高，显示警告
+                            if memory_percent > 80:
+                                st.warning(f"内存使用率过高: {memory_percent:.1f}%，可能影响性能")
+                        update_log_display.last_memory_check = current_time
+                    except Exception as e:
+                        logger.error(f"Error checking memory: {str(e)}")
+
+                # 更新时间戳
+                last_log_update = current_time
+            except Exception as e:
+                logger.error(f"Error updating display: {str(e)}")
 
         # 短暂休眠以减少CPU使用和界面刷新频率
-        time.sleep(1.0)
+        time.sleep(2.0)
 
     # 完成所有视频生成
     progress_bar.progress(100)
     status_text.text(tr("All videos generated successfully"))
 
     # 最后更新一次日志显示
-    update_log_display()
+    with log_container:
+        st.code(get_latest_logs())
+
+    # 清除任务状态表格
+    if hasattr(update_log_display, 'task_table_container'):
+        update_log_display.task_table_container.empty()
 
     # 显示所有生成的视频
     st.success(tr("Batch Video Generation Completed"))
