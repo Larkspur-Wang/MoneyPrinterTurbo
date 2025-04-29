@@ -237,7 +237,7 @@ def wave_animation(clip: ImageClip, speed: float = 1.0) -> ImageClip:
 
 def bounce_animation(clip: ImageClip, speed: float = 1.0) -> ImageClip:
     """
-    每个字符单独跳动的动画效果
+    每个字符单独跳动的动画效果，实现逐一跳动并循环的效果
 
     :param clip: 原始图像剪辑
     :param speed: 动画速度
@@ -248,55 +248,51 @@ def bounce_animation(clip: ImageClip, speed: float = 1.0) -> ImageClip:
         logger.warning("Clip has no duration, using default duration of 5 seconds")
         clip = clip.with_duration(5)
 
-    # 注意：这个函数需要对每个字符单独处理
-    # 但由于我们已经将文本渲染为图像，无法直接操作单个字符
-    # 这里我们实现一个模拟效果，通过对图像应用波浪变形来模拟字符跳动
-
     # 获取原始位置
     original_position = clip.pos
 
     # 获取剪辑的原始尺寸
     w, h = clip.size
 
-    # 创建一个函数，根据时间修改帧
-    def make_frame(t):
-        # 获取原始帧
-        frame = clip.get_frame(t)
+    # 估计字符数量（根据图像宽度和平均字符宽度）
+    # 假设每个字符平均宽度约为图像高度的0.8倍（对于中文字符）
+    avg_char_width = int(h * 0.8)
+    estimated_chars = max(3, w // avg_char_width)  # 至少3个字符，避免估计不足
 
-        # 创建一个新的帧，保持透明通道
-        # 使用与原始帧相同的数据类型和形状，但初始化为透明
-        new_frame = np.zeros_like(frame)
+    # 创建一个函数，根据时间返回位置
+    def get_position(t):
+        # 获取原始位置
+        orig_pos = original_position(t) if callable(original_position) else original_position
 
-        # 如果有alpha通道（RGBA），将所有像素设置为完全透明
-        if frame.shape[2] == 4:
-            new_frame[:, :, 3] = 0  # 设置alpha通道为0（完全透明）
+        # 如果原始位置不是元组或者y坐标是字符串（如"center"）
+        if not isinstance(orig_pos, tuple) or isinstance(orig_pos[1], str):
+            # 保持原始位置不变
+            return orig_pos
 
-        # 对每一列应用不同的垂直偏移，创造波浪效果
-        for x in range(w):
-            # 计算该列的垂直偏移量，使用正弦函数创建波浪效果
-            # 添加x因素使不同位置的字符有不同的跳动时间
-            offset = int(5 * np.sin(speed * 2 * np.pi * t + x * 0.05))
+        # 解包原始位置
+        x, y = orig_pos
 
-            # 确保偏移量在合理范围内
-            offset = max(-10, min(10, offset))
+        # 计算当前活跃的字符索引（0到estimated_chars-1）
+        active_char_index = int((t * speed * 2) % estimated_chars)
 
-            # 应用垂直偏移
-            if offset >= 0:
-                # 向下偏移
-                new_frame[offset:, x] = frame[:h-offset, x] if offset < h else frame[0:1, x]
-            else:
-                # 向上偏移
-                new_frame[:h+offset, x] = frame[-offset:, x] if -offset < h else frame[h-1:h, x]
+        # 计算跳动阶段（0到1）
+        bounce_phase = (t * speed * 2) % 1.0
 
-        return new_frame
+        # 计算跳动高度
+        bounce_height = 0
 
-    # 创建新的剪辑
-    new_clip = VideoClip(make_frame, duration=clip.duration)
+        # 使用正弦函数创建更自然的跳动效果
+        if bounce_phase < 0.5:
+            bounce_height = -15 * np.sin(bounce_phase * 2 * np.pi)  # 负值表示向上移动
 
-    # 保持原始位置
-    new_clip = new_clip.with_position(original_position)
+        # 返回修改后的位置
+        return (x, y + bounce_height)
 
-    return new_clip
+    # 应用位置函数
+    bouncing_clip = clip.with_position(get_position)
+
+    # 返回修改后的剪辑
+    return bouncing_clip
 
 
 def blink_animation(clip: ImageClip, duration: float, speed: float = 1.0) -> ImageClip:

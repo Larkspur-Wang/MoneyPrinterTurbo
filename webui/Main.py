@@ -5,6 +5,12 @@ from uuid import uuid4
 
 import streamlit as st
 from loguru import logger
+try:
+    from streamlit_modal import Modal
+except ImportError:
+    # 如果没有安装streamlit-modal，提供一个提示
+    st.error("请先安装streamlit-modal库: pip install streamlit-modal")
+    Modal = None
 
 # Add the root directory of the project to the system path to allow importing modules from the project
 root_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -47,6 +53,15 @@ hide_streamlit_style = """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 st.title(f"MoneyPrinterTurbo v{config.project_version}")
+
+# 创建预览弹出窗口（全局定义，确保在整个应用中可用）
+if 'preview_modal' not in st.session_state and Modal is not None:
+    st.session_state.preview_modal = Modal(
+        "Video Preview",  # 这里不使用tr()函数，因为此时还没有加载语言文件
+        key="video-preview-modal",
+        padding=20,
+        max_width=800
+    )
 
 support_locales = [
     "zh-CN",
@@ -1205,6 +1220,13 @@ with right_panel:
                     key="title_animation_speed"
                 )
 
+            # 添加预览按钮
+            preview_button = st.button(tr("Preview Effect"), use_container_width=True, type="secondary")
+            if preview_button and Modal is not None and 'preview_modal' in st.session_state:
+                # 更新模态窗口标题为当前语言
+                st.session_state.preview_modal.title = tr("Video Preview")
+                st.session_state.preview_modal.open()
+
             # 预览效果
             st.write(tr("Title Sticker Preview"))
             title_preview_text = params.title_sticker_text or tr("Title Sticker Preview")
@@ -1245,74 +1267,75 @@ with right_panel:
 
             # 不再需要单独的预览代码，因为我们使用了统一预览区域
 
-# 添加统一预览区域
-# 在生成视频按钮之前显示统一预览区域
-with st.container(border=True):
-    st.write(tr("Video Preview"))
-
-    # 准备字幕参数
-    subtitle_params = None
-    if params.subtitle_enabled:
-        # 获取字幕字体路径
-        subtitle_font_path = os.path.join(font_dir, params.font_name)
-
+# 定义预览窗口内容
+if Modal is not None and 'preview_modal' in st.session_state and st.session_state.preview_modal.is_open():
+    with st.session_state.preview_modal.container():
         # 准备字幕参数
-        subtitle_params = {
-            "enabled": params.subtitle_enabled,
-            "text": "字幕预览",
-            "font_path": subtitle_font_path,
-            "font_size": params.font_size,
-            "style": params.art_font_type if params.art_font_enabled else "normal",
-            "background": "rounded_rect" if params.art_font_background != "none" else "none",
-            "background_color": params.art_font_background if params.art_font_background != "none" else "#000000",
-            "border": True,
-            "border_color": params.stroke_color,
-            "position": params.subtitle_position,
-            "custom_position": params.custom_position,
-            "background_enabled": params.art_font_background != "none"
-        }
+        subtitle_params = None
+        if params.subtitle_enabled:
+            # 获取字幕字体路径
+            subtitle_font_path = os.path.join(font_dir, params.font_name)
 
-    # 准备标题参数
-    title_params = None
-    if params.title_sticker_enabled:
-        # 获取标题字体路径
-        title_font_path = os.path.join(font_dir, params.title_sticker_font)
+            # 准备字幕参数
+            subtitle_params = {
+                "enabled": params.subtitle_enabled,
+                "text": "字幕预览",
+                "font_path": subtitle_font_path,
+                "font_size": params.font_size,
+                "style": params.art_font_type if params.art_font_enabled else "normal",
+                "background": "rounded_rect" if params.art_font_background != "none" else "none",
+                "background_color": params.art_font_background if params.art_font_background != "none" else "#000000",
+                "border": True,
+                "border_color": params.stroke_color,
+                "position": params.subtitle_position,
+                "custom_position": params.custom_position,
+                "background_enabled": params.art_font_background != "none"
+            }
 
         # 准备标题参数
-        title_params = {
-            "enabled": params.title_sticker_enabled,
-            "text": params.title_sticker_text or "标题预览",
-            "font_path": title_font_path,
-            "font_size": params.title_sticker_font_size,
-            "style": params.title_sticker_style,
-            "background": params.title_sticker_background,
-            "background_color": params.title_sticker_background_color,
-            "border": params.title_sticker_border,
-            "border_color": params.title_sticker_border_color,
-            "position": params.title_sticker_position,
-            "custom_position": params.title_sticker_custom_position,
-            "background_enabled": params.title_sticker_background_enabled,
-            "text_color": params.title_sticker_text_color,
-            "animation": getattr(params, "title_sticker_animation", "none"),
-            "animation_speed": getattr(params, "title_sticker_animation_speed", 1.0)
-        }
+        title_params = None
+        if params.title_sticker_enabled:
+            # 获取标题字体路径
+            title_font_path = os.path.join(font_dir, params.title_sticker_font)
 
-    # 生成预览图像
-    from app.services.video import create_unified_preview
-    preview_img_path = create_unified_preview(
-        video_aspect=params.video_aspect,
-        subtitle_params=subtitle_params,
-        title_params=title_params
-    )
+            # 准备标题参数
+            title_params = {
+                "enabled": params.title_sticker_enabled,
+                "text": params.title_sticker_text or "标题预览",
+                "font_path": title_font_path,
+                "font_size": params.title_sticker_font_size,
+                "style": params.title_sticker_style,
+                "background": params.title_sticker_background,
+                "background_color": params.title_sticker_background_color,
+                "border": params.title_sticker_border,
+                "border_color": params.title_sticker_border_color,
+                "position": params.title_sticker_position,
+                "custom_position": params.title_sticker_custom_position,
+                "background_enabled": params.title_sticker_background_enabled,
+                "text_color": params.title_sticker_text_color,
+                "animation": getattr(params, "title_sticker_animation", "none"),
+                "animation_speed": getattr(params, "title_sticker_animation_speed", 1.0)
+            }
 
-    # 显示预览图像
-    st.image(preview_img_path, use_container_width=True)
+        # 生成预览图像
+        from app.services.video import create_unified_preview
+        preview_img_path = create_unified_preview(
+            video_aspect=params.video_aspect,
+            subtitle_params=subtitle_params,
+            title_params=title_params
+        )
 
-    # 删除临时文件
-    try:
-        os.remove(preview_img_path)
-    except Exception as e:
-        logger.warning(f"Failed to remove temporary preview image file: {e}")
+        # 显示预览图像
+        st.image(preview_img_path, use_container_width=True)
+
+        # 显示预览说明
+        st.info(tr("This preview shows how your video will look with the current settings."))
+
+        # 删除临时文件
+        try:
+            os.remove(preview_img_path)
+        except Exception as e:
+            logger.warning(f"Failed to remove temporary preview image file: {e}")
 
 # 添加批量生成和单个生成按钮
 col1, col2 = st.columns(2)
